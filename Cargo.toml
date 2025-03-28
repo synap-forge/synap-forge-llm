@@ -33,7 +33,7 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 rayon = "1.10.0"
 rand = "0.8.5"
-ct2rs = { version = "0.9.6", features = ["whisper", "cuda", "cudnn", "cuda-dynamic-loading"], optional = true }
+ct2rs = { version = "0.9.6", features = ["whisper", "cuda", "cudnn", "cuda-dynamic-loading", "flash-attention", "tensor-parallel"], optional = true }
 clap = { version = "4.5.34", features = ["derive"] }
 hound = { version = "3.5.1" }
 #core-graphics-types = {version = "0.1.3", optional = true}
