@@ -118,7 +118,6 @@ use clap::Parser;
 use hound::WavReader;
 use std::path::{Path, PathBuf};
 
-#[cfg(feature = "cuda")]
 use ct2rs::Whisper;
 
 /// Transcribe a file using Whisper models.
@@ -138,7 +137,6 @@ struct Args {
 /// results to stdout.
 ///
 /// The function returns a `Result` to handle any potential errors that may occur.
-#[cfg(feature = "cuda")]
 fn main() -> Result<()> {
     let args = Args::parse();
 
@@ -185,6 +183,3 @@ fn read_audio<T: AsRef<Path>>(path: T, sample_rate: usize) -> Result<Vec<f32>> {
 
     Ok(resample(mono, spec.sample_rate as usize, sample_rate))
 }
-
-#[cfg(not(feature = "cuda"))]
-fn main() {}
