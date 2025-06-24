@@ -7,7 +7,7 @@ use std::sync::Arc;
 use candle_core::{DType, Device, Module, Result, Tensor, D};
 #[cfg(feature = "flash-attn")]
 use candle_flash_attn::flash_attn;
-use candle_nn::{linear_b as linear, Activation, Linear, VarBuilder};
+use candle_nn::{linear_b as linear, Activation, Embedding, Linear, VarBuilder};
 
 fn default_max_position_embeddings() -> usize {
     4096
@@ -123,7 +123,6 @@ impl RotaryEmbedding {
 }
 
 #[derive(Debug, Clone)]
-#[allow(clippy::upper_case_acronyms)]
 struct MLP {
     gate_proj: Linear,
     up_proj: Linear,
@@ -352,18 +351,19 @@ impl DecoderLayer {
 
 #[derive(Debug, Clone)]
 pub struct Model {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
-    lm_head: Linear,
     hidden_size: usize,
+    device: Device,
+    dtype: DType,
 }
 
 impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder, use_flash_attn: bool) -> Result<Self> {
         let vb_m = vb.pp("language_model.model");
-        let embed_tokens =
-            candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
+        let embed_tokens = candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
+
         let rotary_emb = Arc::new(RotaryEmbedding::new(vb.dtype(), cfg, vb.device())?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
@@ -373,13 +373,13 @@ impl Model {
             layers.push(layer)
         }
         let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
-        let lm_head = Linear::new(embed_tokens.embeddings().clone(), None);
         Ok(Self {
             embed_tokens,
             layers,
             norm,
-            lm_head,
             hidden_size: cfg.hidden_size,
+            device: vb.device().clone(),
+            dtype: vb.dtype(),
         })
     }
 
@@ -389,19 +389,17 @@ impl Model {
         tgt_len: usize,
         seqlens_offset: usize,
     ) -> Result<Tensor> {
-        let device = self.lm_head.weight().device();
         let mask: Vec<_> = (0..tgt_len)
             .flat_map(|i| (0..tgt_len).map(move |j| if i < j { f32::NEG_INFINITY } else { 0. }))
             .collect();
-        let mask = Tensor::from_vec(mask, (tgt_len, tgt_len), device)?;
+        let mask = Tensor::from_slice(&mask, (tgt_len, tgt_len), &self.device)?;
         let mask = if seqlens_offset > 0 {
-            let mask0 = Tensor::zeros((tgt_len, seqlens_offset), DType::F32, device)?;
+            let mask0 = Tensor::zeros((tgt_len, seqlens_offset), self.dtype, &self.device)?;
             Tensor::cat(&[&mask0, &mask], 1)?
         } else {
             mask
         };
-        mask.expand((b_size, 1, tgt_len, tgt_len + seqlens_offset))?
-            .to_dtype(self.lm_head.weight().dtype())
+        mask.expand((b_size, 1, tgt_len, tgt_len + seqlens_offset))?.to_dtype(self.dtype)
     }
 
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
@@ -417,9 +415,15 @@ impl Model {
         for layer in self.layers.iter_mut() {
             xs = layer.forward(&xs, attention_mask.as_ref(), seqlen_offset)?
         }
-        xs.narrow(1, seq_len - 1, 1)?
-            .apply(&self.norm)?
-            .apply(&self.lm_head)
+        {
+            let logits = xs
+                .narrow(1, seq_len - 1, 1)?
+                .apply(&self.norm)?
+                .squeeze(1)?
+                .matmul(&self.embed_tokens.embeddings().t()?)?
+                .unsqueeze(1)?;
+            Ok(logits)
+        }
     }
 
     pub fn clear_kv_cache(&mut self) {

@@ -12,8 +12,7 @@ use std::collections::HashSet;
 pub struct TokenOutputStream {
     tokenizer: tokenizers::Tokenizer,
     tokens: Vec<u32>,
-    prev_index: usize,
-    current_index: usize,
+    text: String,
 }
 
 impl TokenOutputStream {
@@ -31,8 +30,7 @@ impl TokenOutputStream {
         Self {
             tokenizer,
             tokens: Vec::new(),
-            prev_index: 0,
-            current_index: 0,
+            text: String::new(),
         }
     }
 
@@ -78,45 +76,12 @@ impl TokenOutputStream {
     /// the newly generated text if applicable, or `None` if no new text
     /// was generated.
     pub fn next_token(&mut self, token: u32) -> Result<Option<String>> {
-        let prev_text = if self.tokens.is_empty() {
-            String::new()
-        } else {
-            let tokens = &self.tokens[self.prev_index..self.current_index];
-            self.decode(tokens)?
-        };
         self.tokens.push(token);
-        let text = self.decode(&self.tokens[self.prev_index..])?;
-        if text.len() > prev_text.len() && text.chars().last().unwrap().is_alphanumeric() {
-            let text = text.split_at(prev_text.len());
-            self.prev_index = self.current_index;
-            self.current_index = self.tokens.len();
-            Ok(Some(text.1.to_string()))
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Decodes any remaining tokens and returns new text generated.
-    ///
-    /// This method checks if there is any new text generated from the
-    /// remaining tokens since the last decoding.
-    ///
-    /// # Returns
-    ///
-    /// Returns a `Result<Option<String>>`, where `Some(String)` contains
-    /// the newly generated text if applicable, or `None` if no new text
-    /// was generated.
-    pub fn decode_rest(&self) -> Result<Option<String>> {
-        let prev_text = if self.tokens.is_empty() {
-            String::new()
-        } else {
-            let tokens = &self.tokens[self.prev_index..self.current_index];
-            self.decode(tokens)?
-        };
-        let text = self.decode(&self.tokens[self.prev_index..])?;
-        if text.len() > prev_text.len() {
-            let text = text.split_at(prev_text.len());
-            Ok(Some(text.1.to_string()))
+        let new_text = self.decode(&self.tokens)?;
+        if new_text.len() > self.text.len() {
+            let new_part = new_text[self.text.len()..].to_string();
+            self.text = new_text;
+            Ok(Some(new_part))
         } else {
             Ok(None)
         }
@@ -161,8 +126,7 @@ impl TokenOutputStream {
     /// previous and current index counters to zero.
     pub fn clear(&mut self) {
         self.tokens.clear();
-        self.prev_index = 0;
-        self.current_index = 0;
+        self.text.clear();
     }
 }
 
