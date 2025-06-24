@@ -99,11 +99,18 @@ impl TextGeneration {
         d_type: DType,
     ) -> (String, i32) {
         self.model.clear_kv_cache();
+
+        // Manually apply the chat template for MedGemma.
+        let prompt = format!(
+            "<start_of_turn>user\n{}\n<end_of_turn>\n<start_of_turn>model",
+            prompt
+        );
+
         self.tokenizer.clear();
         let tokens = self
             .tokenizer
             .tokenizer()
-            .encode(prompt, true)
+            .encode(prompt, true) // `true` to add BOS token.
             .unwrap()
             .get_ids()
             .to_vec();
