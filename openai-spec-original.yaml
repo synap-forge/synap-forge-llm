@@ -10863,11 +10863,11 @@ components:
         model:
           description: |
             ID of the model to use. Only `whisper-1` (which is powered by our open source Whisper V2 model) is currently available.
-          example: whisper-1
+          example: decode_whispers-1
           anyOf:
             - type: string
             - type: string
-              enum: ["whisper-1"]
+              enum: ["decode_whispers-1"]
           x-oaiTypeLabel: string
         language:
           description: |
@@ -11033,11 +11033,11 @@ components:
         model:
           description: |
             ID of the model to use. Only `whisper-1` (which is powered by our open source Whisper V2 model) is currently available.
-          example: whisper-1
+          example: decode_whispers-1
           anyOf:
             - type: string
             - type: string
-              enum: ["whisper-1"]
+              enum: ["decode_whispers-1"]
           x-oaiTypeLabel: string
         prompt:
           description: |

@@ -10,6 +10,7 @@ use std::{
 };
 use tokenizers::{Encoding, Tokenizer};
 
+#[allow(dead_code)]
 pub enum WithDevice {
     AnyCudaDevice,
     SpecificCudaDevice(usize),
@@ -17,6 +18,7 @@ pub enum WithDevice {
 }
 
 /// `CandleEmbedBuilder` is a builder struct for configuring and creating a `BasedBertEmbedder` instance.
+#[allow(dead_code)]
 pub struct CandleEmbedBuilder {
     pub approximate_gelu: bool,
     pub embedding_model: WithModel,
@@ -51,6 +53,7 @@ impl CandleEmbedBuilder {
     ///
     /// * `model` - The preset embedding model to use.
     ///
+    #[allow(dead_code)]
     pub fn set_model_from_presets(mut self, model: WithModel) -> Self {
         self.embedding_model = model;
         self
@@ -61,42 +64,49 @@ impl CandleEmbedBuilder {
     ///
     /// * `embedding_model` - The repo name and the model name to use. See `src/models.rs` for syntax
     ///
+    #[allow(dead_code)]
     pub fn custom_embedding_model(mut self, embedding_model: &str) -> Self {
         self.embedding_model = WithModel::Custom(embedding_model.to_string());
         self
     }
     /// Sets a custom model revision. Default is "main".
     ///
+    #[allow(dead_code)]
     pub fn custom_model_revision(mut self, model_revision: &str) -> Self {
         self.model_revision = model_revision.to_string();
         self
     }
     /// Specifies whether to use approximate GeLU activation function.
     ///
+    #[allow(dead_code)]
     pub fn approximate_gelu(mut self, approximate_gelu: bool) -> Self {
         self.approximate_gelu = approximate_gelu;
         self
     }
     /// Specifies whether to normalize the embeddings.
     ///
+    #[allow(dead_code)]
     pub fn normalize_embeddings(mut self, normalize_embeddings: bool) -> Self {
         self.noramlize_embeddings = normalize_embeddings;
         self
     }
     /// Specifies whether to apply mean pooling to the embeddings. Otherwise, only the CLS token is used.
     ///
+    #[allow(dead_code)]
     pub fn mean_pooling(mut self, mean_pooling: bool) -> Self {
         self.mean_pooling = mean_pooling;
         self
     }
     /// Specifies whether to truncate the text length if it exceeds the maximum input size. Defaults to true.
     ///
+    #[allow(dead_code)]
     pub fn truncate_text_len_overflow(mut self, truncate_text_len_overflow: bool) -> Self {
         self.truncate_text_len_overflow = truncate_text_len_overflow;
         self
     }
     /// Specifies to use the CPU as the device for the model.
     ///
+    #[allow(dead_code)]
     pub fn with_device_cpu(mut self) -> Self {
         self.with_device = WithDevice::Cpu;
         self
@@ -104,6 +114,7 @@ impl CandleEmbedBuilder {
     /// Specifies to use any available CUDA device for the model. It tries ordinals one through six and uses the first available.
     /// If CUDA is not available, it falls back to the CPU.
     ///
+    #[allow(dead_code)]
     pub fn with_device_any_cuda(mut self) -> Self {
         self.with_device = WithDevice::AnyCudaDevice;
         self
@@ -114,6 +125,7 @@ impl CandleEmbedBuilder {
     ///
     /// * `ordinal` - The ordinal number of the CUDA device to use.
     ///
+    #[allow(dead_code)]
     pub fn with_device_specific_cuda(mut self, ordinal: usize) -> Self {
         self.with_device = WithDevice::SpecificCudaDevice(ordinal);
         self
@@ -171,6 +183,7 @@ impl CandleEmbedBuilder {
 /// It provides functionality to load the model into memory, embed single or multiple texts,
 /// and unload the model from memory.
 /// It is initialized with the [CandleEmbedBuilder] struct.
+#[allow(dead_code)]
 pub struct BasedBertEmbedder {
     config: Config,
     mean_pooling: bool,
@@ -210,6 +223,7 @@ impl BasedBertEmbedder {
 
     /// Unloads the BERT model and tokenizer, freeing up memory. Call this when you are done using the model.
     ///
+    #[allow(dead_code)]
     pub fn unload(&self) {
         *self.model.borrow_mut() = None;
         *self.tokenizer.borrow_mut() = None;
@@ -257,7 +271,8 @@ impl BasedBertEmbedder {
 
     /// Embeds a batch of texts using the loaded BERT model.
     ///
-    pub fn embed_batch(&self, texts: &[&str], device: Option<Device>) -> Result<Vec<Vec<f32>>> {
+        #[allow(dead_code)]
+        pub fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Err(Error::msg(
                 "CandleEmbed error: embed_batch called with empty texts",
@@ -265,7 +280,7 @@ impl BasedBertEmbedder {
         }
         let mut embeddings = vec![];
         for text in texts {
-            let embedding = self.embed_one(text, device.clone())?;
+                        let embedding = self.embed_one(text)?;
             embeddings.push(embedding);
         }
         Ok(embeddings)
@@ -273,7 +288,7 @@ impl BasedBertEmbedder {
 
     /// Embeds a single text using the loaded BERT model.
     ///
-    pub fn embed_one(&self, text: &str, device: Option<Device>) -> Result<Vec<f32>> {
+        pub fn embed_one(&self, text: &str) -> Result<Vec<f32>> {
         if text.is_empty() {
             return Err(Error::msg(
                 "CandleEmbed error: embed_one called with empty text",
@@ -336,6 +351,7 @@ impl BasedBertEmbedder {
     }
     /// Counts the number of tokens in a batch of texts using the loaded tokenizer.
     ///
+    #[allow(dead_code)]
     pub fn token_count_batch(&self, texts: &[&str]) -> Result<Vec<usize>> {
         let encodings = self.encode_texts(texts, false)?;
         Ok(encodings
@@ -345,6 +361,7 @@ impl BasedBertEmbedder {
     }
     /// Tokenizes a single text using the loaded tokenizer.
     ///
+    #[allow(dead_code)]
     pub fn tokenize_one(&self, text: &str) -> Result<Vec<String>> {
         if text.is_empty() {
             return Err(Error::msg(
@@ -357,6 +374,7 @@ impl BasedBertEmbedder {
     }
     /// Tokenizes a batch of texts using the loaded tokenizer.
     ///
+    #[allow(dead_code)]
     pub fn tokenize_batch(&self, texts: &[&str]) -> Result<Vec<Vec<String>>> {
         if texts.is_empty() {
             return Err(Error::msg(
@@ -408,6 +426,7 @@ impl BasedBertEmbedder {
     }
     /// Encodes a batch of texts using the loaded tokenizer. Used for the tokenizer functions and for pre-checking the input size. It is not used to generate embeddings.
     ///
+    #[allow(dead_code)]
     fn encode_texts(&self, texts: &[&str], with_trunc_settings: bool) -> Result<Vec<Encoding>> {
         if texts.iter().any(|text| text.is_empty()) {
             return Err(Error::msg(

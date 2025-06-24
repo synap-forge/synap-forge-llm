@@ -1,8 +1,10 @@
 use candle_core::{DType, Device};
-use candle_transformers::models::llama::{Config, Llama};
+
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokenizers::Tokenizer;
+
 // Models
 
 #[derive(Serialize, Deserialize)]
@@ -132,7 +134,7 @@ pub struct ChatCompletionFunctions {
 }
 
 #[derive(Serialize, Deserialize)]
-pub(crate) struct ChatCompletionRequestMessage {
+pub struct ChatCompletionRequestMessage {
     pub(crate) role: String,
     pub(crate) content: String,
     // ... other fields
@@ -161,7 +163,7 @@ pub(crate) struct ChatCompletionResponseMessage {
     pub(crate) content: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize)]
 pub struct CreateCompletionRequest {
     pub model: String,
     pub prompt: Option<String>,
@@ -272,17 +274,27 @@ pub struct DeleteModelResponse {
     pub deleted: bool,
 }
 
+
+
 #[derive(Clone)]
 pub struct AppState {
-    pub(crate) model: Llama,
-    pub(crate) device: Device,
-    pub(crate) tokenizer: Tokenizer,
-    pub(crate) config: Config,
-    pub(crate) d_type: DType,
+    pub model: crate::core::Model,
+    pub device: Device,
+    pub tokenizer: Tokenizer,
+    pub config: crate::core::Config,
+    pub d_type: DType,
 }
 
-impl From<(Llama, Device, Tokenizer, Config, DType)> for AppState {
-    fn from(e: (Llama, Device, Tokenizer, Config, DType)) -> Self {
+impl From<(crate::core::Model, Device, Tokenizer, crate::core::Config, DType)> for AppState {
+    fn from(
+        e: (
+            crate::core::Model,
+            Device,
+            Tokenizer,
+            crate::core::Config,
+            DType,
+        ),
+    ) -> Self {
         Self {
             model: e.0,
             device: e.1,

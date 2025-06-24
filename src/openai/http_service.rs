@@ -1,5 +1,5 @@
 use crate::core::generator::TextGeneration;
-use crate::core::{MODEL_NAME, MODEL_REVISION};
+
 use crate::embedding::lib::CandleEmbedBuilder;
 use crate::openai::models::{AppState, CompletionUsage, EmbeddingUsage};
 use crate::openai::models::{
@@ -12,7 +12,6 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
-use candle_core::DType;
 use chrono::Utc;
 use tracing::{debug, info, trace};
 use uuid::Uuid;
@@ -69,31 +68,43 @@ pub async fn create_chat_completion(
         Option<f64>,
         Option<usize>,
     ) = (
-        state,
+        state.clone(),
         request.temperature,
         request.top_p,
         None,
         request.seed,
-        request.frequency_penalty,
+        None, // Do not use frequency_penalty as repeat_penalty
         None,
     );
-    let text_gen = TextGeneration::from(request_tuple);
+    let mut text_gen = TextGeneration::from(request_tuple);
     let max_tokens = request.max_tokens;
 
     let content_vec: Vec<_> = request
         .messages
         .into_iter()
-        .map(|message| format!("{}:{}", message.role, message.content))
+        .map(|message| {
+            // Use proper Gemma chat template format
+            match message.role.as_str() {
+                "user" => format!("<start_of_turn>user\n{}<end_of_turn>", message.content),
+                "assistant" => format!("<start_of_turn>model\n{}<end_of_turn>", message.content),
+                "system" => format!("<start_of_turn>user\n{}<end_of_turn>", message.content), // Gemma doesn't support system role, treat as user
+                _ => format!("<start_of_turn>user\n{}<end_of_turn>", message.content), // Default to user
+            }
+        })
         .collect();
-    let messages = content_vec.join(" ");
+    let messages = format!("{}\n<start_of_turn>model\n", content_vec.join("\n"));
     info!("Messages {}", messages);
-    let content_result = text_gen.generate(messages, max_tokens, d_type);
+    let content_result = tokio::task::spawn_blocking(move || {
+        text_gen.generate(messages, max_tokens, d_type)
+    })
+    .await
+    .unwrap();
 
     let response = CreateChatCompletionResponse {
         id: Uuid::new_v4().to_string(),
         object: "text_completion".to_string(),
         created: Utc::now().timestamp(),
-        model: MODEL_NAME.to_string(),
+        model: state.config.get_model_name().to_string(),
         choices: vec![ChatCompletionChoice {
             index: 0,
             message: ChatCompletionResponseMessage {
@@ -143,20 +154,22 @@ pub async fn create_completion(
         Option<f64>,
         Option<usize>,
     ) = (
-        state,
+        state.clone(),
         request.temperature,
         request.top_p,
         None,
         request.seed,
-        request.frequency_penalty,
+        None, // Do not use frequency_penalty as repeat_penalty
         None,
     );
-    let text_gen = TextGeneration::from(request_tuple);
+    let mut text_gen = TextGeneration::from(request_tuple);
 
     let prompt = String::from(request.prompt.unwrap());
     let max_tokens = request.max_tokens;
 
-    let result = text_gen.generate(prompt, max_tokens, d_type);
+    let result = tokio::task::spawn_blocking(move || text_gen.generate(prompt, max_tokens, d_type))
+        .await
+        .unwrap();
 
     debug!("The result is: {:?}", result.0);
     debug!("The token generated is: {:?}", result.1);
@@ -165,7 +178,7 @@ pub async fn create_completion(
         id: Uuid::new_v4().to_string(),
         object: "text_completion".to_string(),
         created: Utc::now().timestamp(),
-        model: MODEL_NAME.to_string(),
+        model: state.config.get_model_name().to_string(),
         choices: vec![CompletionChoice {
             text: result.0.to_string(),
             index: 0,
@@ -196,7 +209,7 @@ pub async fn create_completion(
 ///
 /// A tuple containing the HTTP status code and the `CreateEmbeddingResponse` wrapped in `Json`.
 pub async fn create_embedding(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Json(req): Json<CreateEmbeddingRequest>,
 ) -> impl IntoResponse {
     // TODO: Process request and return response
@@ -204,7 +217,7 @@ pub async fn create_embedding(
 
     // Embed a single text
     let embeddings = candle_embed
-        .embed_one(req.input.as_str(), None)
+                .embed_one(req.input.as_str())
         .unwrap()
         .into_iter()
         .map(|x| x as f64)
@@ -239,7 +252,7 @@ pub async fn create_embedding(
 /// # Returns
 ///
 /// A tuple containing the HTTP status code and the `ListModelsResponse` wrapped in `Json`.
-pub async fn list_models(State(state): State<AppState>) -> impl IntoResponse {
+pub async fn list_models(State(_state): State<AppState>) -> impl IntoResponse {
     // TODO: Fetch list of models and return response
     let response = ListModelsResponse {
         object: "list".to_string(),
@@ -276,7 +289,7 @@ pub async fn list_models(State(state): State<AppState>) -> impl IntoResponse {
 ///
 /// A tuple containing the HTTP status code and the `Model` wrapped in `Json`.
 pub async fn retrieve_model(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Path(model_id): Path<Stop>,
 ) -> impl IntoResponse {
     // TODO: Fetch model details and return response
@@ -309,7 +322,7 @@ pub async fn retrieve_model(
 ///
 /// A tuple containing the HTTP status code and the `DeleteModelResponse` wrapped in `Json`.
 pub async fn delete_model(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Path(model_id): Path<Stop>,
 ) -> impl IntoResponse {
     // TODO: Delete model and return response

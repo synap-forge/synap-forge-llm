@@ -14,6 +14,7 @@ pub const BGE_BASE_EN_V1_5: &str = "BAAI/bge-base-en-v1.5";
 pub const ALL_MINILM_L6_V2: &str = "sentence-transformers/all-MiniLM-L6-v2";
 
 /// `WithModel` is an enum that represents different preset embedding models or a custom model.
+#[allow(dead_code)]
 pub enum WithModel {
     E5Mistral7bInstruct,
     SfrEmbeddingMistral,
@@ -29,6 +30,7 @@ pub enum WithModel {
 
 impl WithModel {
     // Function to create an enum variant from a given model ID string
+    #[allow(dead_code)]
     pub fn get_model_id_enum(model_id: &str) -> Self {
         match model_id {
             E5_MISTRAL_7B_INSTRUCT => WithModel::E5Mistral7bInstruct,

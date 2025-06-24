@@ -1,10 +1,14 @@
 use crate::core::output_stream::WeightMaps;
-use crate::core::{MODEL_NAME, MODEL_REVISION};
+use crate::core::{Config, Model, ModelConfig, ModelType, USE_FLASH_ATTN};
 use crate::openai::models::AppState;
 use anyhow::Error as E;
 use candle_core::{DType, Device};
 use candle_nn::VarBuilder;
-use candle_transformers::models::llama::{Config, Llama as Llama3, LlamaConfig};
+use candle_transformers::models::llama::{Llama, LlamaConfig};
+use candle_transformers::models::mistral::{Config as MistralConfig, Model as Mistral};
+use candle_transformers::models::gemma3::{Config as GemmaConfig, Model as Gemma};
+
+use crate::core::medgemma::{Model as MedGemmaModel, TopLevelConfig as MedGemmaTopLevelConfig};
 use hf_hub::api::sync::{ApiBuilder, ApiRepo};
 use hf_hub::{Repo, RepoType};
 use serde::{Deserialize, Deserializer};
@@ -133,22 +137,22 @@ fn get_tokenizer(repo: &ApiRepo) -> anyhow::Result<Tokenizer> {
     Tokenizer::from_file(tokenizer_filename).map_err(E::msg)
 }
 
-/// Retrieves a `Config` from a specified repository.
+/// Retrieves a configuration from a specified repository.
 ///
 /// This function attempts to load a configuration by first fetching the filename
 /// of the configuration file from the provided `ApiRepo`. It then reads the
-/// configuration data from the specified file and converts it into a `Config`
-/// instance.
+/// configuration data from the specified file and converts it into a `Box<dyn std::any::Any>` instance.
 ///
 /// # Parameters
 ///
 /// - `repo`: A reference to an `ApiRepo` instance, which is used to access
 ///   the configuration file.
+/// - `model_type`: The type of the model.
 ///
 /// # Returns
 ///
 /// Returns a result containing either:
-/// - `Ok(Config)`: The loaded `Config` instance if successful.
+/// - `Ok(Box<dyn std::any::Any>)`: The loaded configuration instance if successful.
 /// - `Err(anyhow::Error)`: An error if the filename cannot be retrieved,
 ///   if reading the configuration file fails, or if deserialization fails.
 ///
@@ -158,14 +162,7 @@ fn get_tokenizer(repo: &ApiRepo) -> anyhow::Result<Tokenizer> {
 /// - The configuration filename cannot be obtained from the repository.
 /// - There is an issue reading the configuration data from the file.
 /// - Deserialization of the configuration data fails.
-fn get_config(repo: &ApiRepo) -> anyhow::Result<Config> {
-    let config_filename = repo.get("config.json")?;
 
-    let config: LlamaConfig = serde_json::from_slice(&std::fs::read(config_filename)?)?;
-    let config = config.into_config(false);
-
-    Ok(config)
-}
 
 /// Retrieves the preferred computational device.
 ///
@@ -185,45 +182,11 @@ fn get_device() -> Device {
     let device_cuda = Device::new_cuda(0);
     let device_metal = Device::new_metal(0);
 
-    let device = device_metal.or(device_cuda).unwrap_or(Device::Cpu);
+    let device = device_cuda.or(device_metal).unwrap_or(Device::Cpu);
 
     info!("Device Info {:?}", device);
 
     device
-}
-
-/// Retrieves an `ApiRepo` instance using the provided authentication token.
-///
-/// This function initializes an API client with the specified token and
-/// constructs a repository for a specific model. It uses the `ApiBuilder`
-/// to create the API client and sets up the model ID and revision for the
-/// repository.
-///
-/// # Parameters
-///
-/// - `token`: A `String` representing the authentication token used to
-///   access the API.
-///
-/// # Returns
-///
-/// Returns a result containing either:
-/// - `Ok(ApiRepo)`: The constructed `ApiRepo` instance if successful.
-/// - `Err(anyhow::Error)`: An error if the API client cannot be built or
-///   if any other issue occurs during the process.
-///
-/// # Errors
-///
-/// This function may return an error if:
-/// - The API client fails to initialize with the provided token.
-/// - There is an issue creating the repository for the specified model.
-fn get_repo(token: String) -> anyhow::Result<ApiRepo> {
-    let api = ApiBuilder::new().with_token(Some(token)).build()?;
-    let model_id = MODEL_NAME.to_string();
-    Ok(api.repo(Repo::with_revision(
-        model_id,
-        RepoType::Model,
-        MODEL_REVISION.to_string(),
-    )))
 }
 
 /// Initializes a machine learning model and its associated components.
@@ -237,29 +200,30 @@ fn get_repo(token: String) -> anyhow::Result<ApiRepo> {
 ///
 /// - `token`: A `String` representing the authentication token used to
 ///   access the model repository.
+/// - `model_config`: A `ModelConfig` specifying the model to load
 ///
 /// # Returns
 ///
 /// Returns a result containing either:
 /// - `Ok(AppState)`: The initialized application state containing the model,
-///   device, tokenizer, and configuration if successful.
-/// - `Err(anyhow::Error)`: An error if any of the initialization steps fail.
-///
-/// # Errors
-///
-/// This function may return an error if:
-/// - The repository cannot be retrieved using the provided token.
-/// - The tokenizer cannot be loaded from the repository.
-/// - The device initialization fails.
-/// - There is an issue loading the safe tensor files.
-/// - The configuration cannot be retrieved from the repository.
-/// - The model fails to load from the safe tensor files.
-pub fn initialise_model(token: String) -> anyhow::Result<AppState> {
-    let repo = get_repo(token)?;
+pub fn initialise_model(token: String, model_config: Option<ModelConfig>) -> Result<AppState, E> {
+    let model_config = model_config.unwrap_or_else(|| ModelConfig::default_llama3());
+    
+    let repo = {
+        let model_name = model_config.get_model_name();
+        let model_revision = model_config.get_model_revision().unwrap_or("main");
+        
+        let api = ApiBuilder::new()
+            .with_token(Some(token))
+            .build()?;
+    
+        api.repo(Repo::with_revision(model_name.to_string(), RepoType::Model, model_revision.to_string()))
+    };
+
     let tokenizer = get_tokenizer(&repo)?;
 
     let device = get_device();
-    let d_type = DType::F16;
+    let d_type = model_config.get_dtype().unwrap_or(DType::F16);
 
     let file_path = match hub_load_safe_tensors(&repo, "model.safetensors.index.json") {
         Ok(files) => files,
@@ -269,12 +233,42 @@ pub fn initialise_model(token: String) -> anyhow::Result<AppState> {
         }
     };
 
-    let config = get_config(&repo)?;
+    let config_path = repo.get("config.json")?;
 
-    let model = {
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&*file_path, d_type, &device)? };
-        Llama3::load(vb, &config)?
+    let (model, config) = match model_config.get_model_type() {
+        ModelType::Llama => {
+            let vb = unsafe { VarBuilder::from_mmaped_safetensors(&file_path, d_type, &device)? };
+            let config_data = std::fs::read(&config_path)?;
+            let config: LlamaConfig = serde_json::from_slice(&config_data)?;
+            let config = config.into_config(USE_FLASH_ATTN);
+            let model = Model::Llama(Llama::load(vb, &config)?);
+            (model, Config::Llama(config))
+        },
+        ModelType::Mistral => {
+            let vb = unsafe { VarBuilder::from_mmaped_safetensors(&file_path, d_type, &device)? };
+            let config_data = std::fs::read(&config_path)?;
+            let config: MistralConfig = serde_json::from_slice(&config_data)?;
+            let model = Model::Mistral(Mistral::new(&config, vb)?);
+            (model, Config::Mistral(config))
+        },
+        ModelType::Gemma => {
+            let vb = unsafe { VarBuilder::from_mmaped_safetensors(&file_path, d_type, &device)? };
+            let config_data = std::fs::read(&config_path)?;
+            let config: GemmaConfig = serde_json::from_slice(&config_data)?;
+            let model = Model::Gemma(Gemma::new(USE_FLASH_ATTN, &config, vb)?);
+            (model, Config::Gemma(config))
+        },
+        ModelType::MedGemma => {
+            let vb = unsafe { VarBuilder::from_mmaped_safetensors(&file_path, d_type, &device)? };
+            let config_data = std::fs::read(&config_path)?;
+            let top_level_config: MedGemmaTopLevelConfig = serde_json::from_slice(&config_data)?;
+            let config = top_level_config.text_config;
+            let model = Model::MedGemma(MedGemmaModel::new(&config, vb, USE_FLASH_ATTN)?);
+            (model, Config::MedGemma(config))
+        }
     };
 
     Ok((model, device, tokenizer, config, d_type).into())
 }
+
+
