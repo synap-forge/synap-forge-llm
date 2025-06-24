@@ -178,14 +178,16 @@ impl TextGeneration {
                 logits
             } else {
                 let start_at = tokens.len().saturating_sub(self.repeat_last_n);
-                let logits = candle_transformers::utils::apply_repeat_penalty(
+                candle_transformers::utils::apply_repeat_penalty(
                     &logits,
                     self.repeat_penalty as f32,
                     &tokens[start_at..],
                 )
-                .unwrap();
-                logits
+                .unwrap()
             };
+
+            // Clamp the logits to prevent numerical instability.
+            let logits = logits.clamp(-1e5f32, 1e5f32).unwrap();
 
             match self.logits_processor.sample(&logits) {
                 Ok(next_token) => {
