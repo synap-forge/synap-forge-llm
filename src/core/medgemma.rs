@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
-#[cfg(feature = "cuda")]
+#[cfg(feature = "flash-attn")]
 use candle_flash_attn::flash_attn;
 use candle_nn::{linear_b as linear, Activation, Linear, VarBuilder};
 
@@ -43,7 +43,9 @@ impl Config {
     fn hidden_act(&self) -> Result<Activation> {
         match (self.hidden_act, self.hidden_activation) {
             (None, Some(act)) | (Some(act), None) => Ok(act),
-            (Some(_), Some(_)) => candle_core::bail!("both hidden_act and hidden_activation are set"),
+            (Some(_), Some(_)) => {
+                candle_core::bail!("both hidden_act and hidden_activation are set")
+            }
             (None, None) => candle_core::bail!("none of hidden_act and hidden_activation are set"),
         }
     }
@@ -170,7 +172,12 @@ struct Attention {
 }
 
 impl Attention {
-    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder, #[allow(unused_variables)] use_flash_attn: bool) -> Result<Self> {
+    fn new(
+        rotary_emb: Arc<RotaryEmbedding>,
+        cfg: &Config,
+        vb: VarBuilder,
+        use_flash_attn: bool,
+    ) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
@@ -179,12 +186,12 @@ impl Attention {
         let k_proj = linear(hidden_sz, num_kv_heads * head_dim, false, vb.pp("k_proj"))?;
         let v_proj = linear(hidden_sz, num_kv_heads * head_dim, false, vb.pp("v_proj"))?;
         let o_proj = linear(num_heads * head_dim, hidden_sz, false, vb.pp("o_proj"))?;
-                let use_flash_attn = {
-            #[cfg(feature = "cuda")]
+        let use_flash_attn = {
+            #[cfg(feature = "flash-attn")]
             {
-                use_flash_attn && cfg.attention_bias.unwrap_or(false) && utils::cuda_is_available()
+                use_flash_attn && !cfg.attention_bias.unwrap_or(false) && vb.device().is_cuda()
             }
-            #[cfg(not(feature = "cuda"))]
+            #[cfg(not(feature = "flash-attn"))]
             {
                 false
             }
@@ -243,35 +250,30 @@ impl Attention {
         let k = self.repeat_kv(k)?;
         let v = self.repeat_kv(v)?;
 
-        let attn_output = {
-            #[cfg(feature = "cuda")]
+        let attn_output = if self.use_flash_attn {
+            #[cfg(feature = "flash-attn")]
             {
-                if self.use_flash_attn {
-                    let q = q.contiguous()?;
-                    let k = k.contiguous()?;
-                    let v = v.contiguous()?;
-                    flash_attn(&q, &k, &v, 1. / (self.head_dim as f32).sqrt(), false)
-                } else {
-                    let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
-                    let att = match attention_mask {
-                        None => att,
-                        Some(mask) => att.broadcast_add(mask)?,
-                    };
-                    let att = candle_nn::ops::softmax_last_dim(&att)?;
-                    att.matmul(&v)
-                }
+                // flash-attn expects (b_sz, seq_len, nheads, head_dim)
+                let q = q.transpose(1, 2)?;
+                let k = k.transpose(1, 2)?;
+                let v = v.transpose(1, 2)?;
+                let softmax_scale = 1f32 / (self.head_dim as f32).sqrt();
+                flash_attn(&q, &k, &v, softmax_scale, q_len > 1)?.transpose(1, 2)?
             }
-            #[cfg(not(feature = "cuda"))]
+            #[cfg(not(feature = "flash-attn"))]
             {
-                let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
-                let att = match attention_mask {
-                    None => att,
-                    Some(mask) => att.broadcast_add(mask)?,
-                };
-                let att = candle_nn::ops::softmax_last_dim(&att)?;
-                att.matmul(&v)
+                unreachable!()
             }
-        }?;
+        } else {
+            let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
+            let att = match attention_mask {
+                None => att,
+                Some(mask) => att.broadcast_add(mask)?,
+            };
+            let att = candle_nn::ops::softmax_last_dim(&att)?;
+            att.matmul(&v.contiguous()?)?
+        };
+
         attn_output
             .transpose(1, 2)?
             .reshape((b_sz, q_len, ()))?
@@ -304,10 +306,16 @@ struct DecoderLayer {
 }
 
 impl DecoderLayer {
-    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder, use_flash_attn: bool) -> Result<Self> {
+    fn new(
+        rotary_emb: Arc<RotaryEmbedding>,
+        cfg: &Config,
+        vb: VarBuilder,
+        use_flash_attn: bool,
+    ) -> Result<Self> {
         let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"), use_flash_attn)?;
         let mlp = MLP::new(cfg, vb.pp("mlp"))?;
-        let input_layernorm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
+        let input_layernorm =
+            RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
         let post_attention_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
@@ -360,7 +368,8 @@ impl Model {
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers {
-            let layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx), use_flash_attn)?;
+            let layer =
+                DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx), use_flash_attn)?;
             layers.push(layer)
         }
         let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
